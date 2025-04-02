@@ -1,52 +1,69 @@
+import sys
 from collections import Counter
-import numpy as np
 import torch
-from torch import nn as nn
+import torch.nn as nn
+import torch.optim as optim
 
 STANDARD_SEQUENCE_LENGTH = 50
-FILE_NAME = "shakespeare.txt"
-EMBEDDING_DIM_SIZE = 128
 HIDDEN_DIM_SIZE = 256
-NUM_LAYERS = 2
+NUM_LAYERS = 1
 EPOCHS = 30
 LR = 0.015
 
-# Tokenize and preprocess the text
-def tokenize_text(text: str) -> tuple[list[str], dict, dict]:
-    # Convert text to lowercase and split into characters or words
-    tokens = list(text.lower()) 
+'''
+STEP 1: Prepare the Dataset
+'''
+def prepareText(filename: str, seq_length = STANDARD_SEQUENCE_LENGTH):
+    # Tokenize the text into lowercase characters .
+    tokens = None
     
-    # Creatres a frequency dictionary of all words within the input text
+    with open(filename, "r") as f:
+        tokens = list(f.read().lower())
+
+    # Convert tokens into numerical indices (word2idx mapping).
     token_counts = Counter(tokens)
     
     # vocab is a list containing each unique word within the input text, sorted by its frequency
     vocab = sorted(token_counts, key=token_counts.get, reverse=True)
     
     # A dictionary of indexes and their corresponding token
-    int_to_token = {i: ch for i, ch in enumerate(vocab)}
+    ind_to_token = {i: ch for i, ch in enumerate(vocab)}
     
     # A dictionary of tokens and their corresponding index
-    token_to_int = {ch: i for i, ch in enumerate(vocab)}
+    token_to_ind = {ch: i for i, ch in enumerate(vocab)}
     
-    return tokens, token_to_int, int_to_token
-
-# Text is split into fixed-length sequences. Standard length is set within STANDARD_SEQUENCE_LENGTH,
-# or a custom length can be taken as input.
-def create_sequences(tokens: list[str], token_to_int: dict, seq_length = STANDARD_SEQUENCE_LENGTH) -> tuple[np.array, np.array]:
+    
+    print("The number of characters in the text is: ", len(tokens))
+    print("The number of unique characters is:", len(vocab))
+    
     sequences = []
     targets = []
     
-    # Sliding window approach where we take every group of 50 words and add their corresponding index to
-    # sequences (e.g., [hello, world, my, name, is, blank] -> [0, 11, 23, 3, 5, 99]), while targets stores
-    # the index of the start of the next window.
+    # Sliding window approach where we take every group of 50 characters and add their corresponding index to
+    # sequences (e.g., [h, e, l, l, o, ' ', w, o, r, l, d] -> [0, 11, 23, 3, 5, 99]), while targets stores
+    # the index of the start of the next window for use during training. When the sequence is used for training,
+    # the predicted value is compared to the corresponding index in targets to see if it predicted the next character correctly.
     for i in range(0, len(tokens) - seq_length):
-        sequences.append([token_to_int[ch] for ch in tokens[i:i+seq_length]])
-        targets.append(token_to_int[tokens[i+seq_length]])
-        
-    return np.array(sequences), np.array(targets)
+        sequences.append([token_to_ind[ch] for ch in tokens[i:i+seq_length]])
+        targets.append(token_to_ind[tokens[i+seq_length]])
+    
+    print("Total Patterns: ", len(sequences))
+    
+    # Convert the arrays into tensors, which are a data structure used to hold a multi-dimensional
+    # matrix that consists of a single data-type. They are similar to numpy arrays, except tensors support
+    # gpu computing (more relevant for deep learning models) and autograd (tracks the history of every computation
+    # and thus speeds up the computation of the loss function). 
+    
+    # Reshape sequences to be [samples, time steps, features]
+    sequences = torch.tensor(sequences, dtype=torch.float32).reshape(len(sequences), seq_length, 1)
+    sequences = sequences / float(len(vocab))
+    targets = torch.tensor(targets)
+    print(sequences.shape, targets.shape)
+    
+    return len(vocab)
 
 '''
-Actually creating the RNN model using pytorch.
+STEP 2: Define the RNN Model
 
 vocab_size: Size of your vocabulary (number of unique tokens).
 
@@ -57,12 +74,9 @@ hidden_dim: Number of features within the hidden state in the LSTM.
 n_layers: Number of LSTM layers (e.g., 2 or 3 for deeper networks).
 '''
 class TextGenerationModel(nn.Module):
-    def __init__(self, vocab_size: int, embedding_dim: int, hidden_dim: int, n_layers: int):
-        super(TextGenerationModel, self).__init__()
-        
-        # The embedding layer within a NN transforms tokens into vectors of a fixed size
-        self.embedding = nn.Embedding(vocab_size, embedding_dim)
-        
+    def __init__(self, vocab_size: int):
+        super().__init__()
+
         '''
         RNNs face challenges in learning long-term dependencies where information from distant time steps becomes 
         crucial for making accurate predictions for current state. This is known as the vanishing gradient problem.
@@ -76,80 +90,43 @@ class TextGenerationModel(nn.Module):
         
         The solution to this is to use an LSTM (Long Short-Term Memory), which ntroduce a memory cell that holds information 
         over extended periods addressing the challenge of learning long-term dependencies.
+        
+        input_size: The input is a single feature (i.e. one integer for a single character)
+        hidden_size: Number of features within the hidden state in the LSTM.
+        num_layers: Number of LSTM layers (e.g., 2 or 3 for deeper networks).
+        batch_first: Input and output tensors are provided as (batch, seq, feature)
         '''
-        self.lstm = nn.LSTM(embedding_dim, hidden_dim, n_layers, batch_first=True)
+        self.lstm = nn.LSTM(input_size=1, hidden_size=HIDDEN_DIM_SIZE, num_layers=NUM_LAYERS, batch_first=True)
         
-        # Applies an affine linear transformation to the incoming data. The fully connected layer for output predictions
-        self.fc = nn.Linear(hidden_dim, vocab_size)
-    
-    '''
-    x: A sequence, which is an array of indices generated in the preprocessing step
-    hidden: 
-    '''
-    def forward(self, x, hidden):
-        # Converts input token indices into dense vector embeddings.
-        x = self.embedding(x)
+        # During training, randomly zeroes some of the elements of the input tensor with probability p. It is
+        # proven to be an effective technique for regularization.
+        self.dropout = nn.Dropout(0.2)
         
-        # The embeddings are passed through an LSTM
-        out, hidden = self.lstm(x, hidden)
+        # Applies an affine linear transformation to the incoming data. The fully connected layer for output predictions.
+        self.fc = nn.Linear(HIDDEN_DIM_SIZE, vocab_size)
+    
+
+    def forward(self, x):
+        # Take only the last output, which is the feature.
+        x, _ = self.lstm(x)
         
-        # Maps the LSTM's hidden states to the vocabulary space, predicting the next token at each time step.
-        out = self.fc(out[:, -1, :]) 
-        
-        return out, hidden
-
-
-def train_model(model, data_loader, epochs=EPOCHS, lr=LR):
-    # The loss function that measures the difference between the predicted output and actual output.
-    criterion = nn.CrossEntropyLoss()
+        # Produce output
+        x = x[:, -1, :]
+       
+        x = self.linear(self.dropout(x))
+        return x
     
-    # The optimizer function used to minimize the loss function
-    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
-    
-    
-    for epoch in range(epochs):
-        hidden = None
-        for inputs, targets in data_loader:
-            inputs, targets = inputs.to(device), targets.to(device)
-            
-            # Reset gradients
-            optimizer.zero_grad()
-            
-            # Forward pass
-            output, hidden = model(inputs, hidden)
-            hidden = tuple([h.detach() for h in hidden])  # Detach hidden state to prevent memory leaks
-            
-            # Compute loss and backpropagate
-            loss = criterion(output, targets)
-            loss.backward()
-            optimizer.step()
-            
-        print(f"Epoch: {epoch+1}, Loss: {loss.item()}")
+'''
+STEP 3: Train the Model
+'''
 
-
-def generate_text(model, seed_text, token_to_int, int_to_token, length=100):
-    model.eval()
-    generated = [token_to_int[ch] for ch in seed_text.lower()]
-    hidden = None
-    
-    for _ in range(length):
-        inputs = torch.tensor(generated[-50:], dtype=torch.long).unsqueeze(0)
-        output, hidden = model(inputs, hidden)
-        pred_token = torch.argmax(output, dim=1).item()
-        generated.append(pred_token)
-    
-    return ''.join([int_to_token[idx] for idx in generated])
-
+def trainModel():
+    pass
 
 if __name__ == "__main__":
-    tokens, token_to_int, int_to_token = None, None, None
+    filename = sys.argv[1]
     
-    with open(FILE_NAME, "r") as f:
-        tokens, token_to_int, int_to_token = tokenize_text(f.read())
-        
-    sequences, targets = create_sequences(tokens, token_to_int)
-    print(tokens)
+    vocab_size = prepareText(filename)
     
-    RNNmodel = TextGenerationModel(len(token_to_int), EMBEDDING_DIM_SIZE, HIDDEN_DIM_SIZE, NUM_LAYERS)
-    train_model(RNNmodel, data_loader)
-    generate_text(RNNmodel, input("Input the starting text you would like to use: "), token_to_int, int_to_token)
+    model = TextGenerationModel(vocab_size=vocab_size)
+    
