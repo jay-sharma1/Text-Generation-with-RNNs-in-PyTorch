@@ -18,4 +18,16 @@ This ability to retain and utilize past context makes RNNs highly effective for 
 
 # What does this code do?
 This project covers building a RNN model to generate text. The idea is to train a model on a large corpus of text, and then have the model generate new, coherent text based on patterns it has learned. In this case we will be using a text containing Shakespeare's Sonnets (source: Project Gutenburg).
+
+Create a virtual environment in python (venv) and install the requirements from the requirements.txt
+
+Make sure you have an Nvidia GPU that is CUDA-enabled.
+
+The FILE_NAME variable targets the text file used for training so feel free to change it to one of your choose. I used shakespeare provided by Project Gutenburg.
+
+Run main.py and it should start training on the provided text. Afterwards it will ask you to give it input text for it extrapolate the rest from (it may not be very good).
+
+
+
+
     

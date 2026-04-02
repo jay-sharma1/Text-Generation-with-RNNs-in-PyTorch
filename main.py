@@ -122,8 +122,8 @@ def train_model(model, data_loader, epochs=EPOCHS, lr=LR):
 
     
     for epoch in range(epochs):
-        hidden = None
         for inputs, targets in data_loader:
+            hidden = None
             inputs, targets = inputs.to(device), targets.to(device)
             
             # Reset gradients
@@ -136,6 +136,7 @@ def train_model(model, data_loader, epochs=EPOCHS, lr=LR):
             # Compute loss and backpropagate
             loss = criterion(output, targets)
             loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
             
         print(f"Epoch: {epoch+1}, Loss: {loss.item()}")
@@ -145,9 +146,10 @@ def generate_text(model, seed_text, token_to_int, int_to_token, length=100):
     model.eval()
     generated = [token_to_int[ch] for ch in seed_text.lower()]
     hidden = None
+    device = next(model.parameters()).device
     
-    for _ in range(length): 
-        inputs = torch.tensor(generated[-50:], dtype=torch.long).unsqueeze(0)
+    for _ in range(length):
+        inputs = torch.tensor(generated[-50:], dtype=torch.long).unsqueeze(0).to(device)
         output, hidden = model(inputs, hidden)
         pred_token = torch.argmax(output, dim=1).item()
         generated.append(pred_token)
@@ -158,14 +160,18 @@ def generate_text(model, seed_text, token_to_int, int_to_token, length=100):
 if __name__ == "__main__":
     tokens, token_to_int, int_to_token = None, None, None
     
+    
     with open(FILE_NAME, "r") as f:
         tokens, token_to_int, int_to_token = tokenize_text(f.read())
         
     sequences, targets = create_sequences(tokens, token_to_int)
-    print(tokens)
+
+    dataset = torch.utils.data.TensorDataset(torch.tensor(sequences, dtype=torch.long), torch.tensor(targets))
+    data_loader = torch.utils.data.DataLoader(dataset, batch_size=64, shuffle=True)
+
     
     RNNmodel = TextGenerationModel(len(token_to_int), EMBEDDING_DIM_SIZE, HIDDEN_DIM_SIZE, NUM_LAYERS)
     train_model(RNNmodel, data_loader)
-    generate_text(RNNmodel, input("Input the starting text you would like to use: "), token_to_int, int_to_token)
+    print(generate_text(RNNmodel, input("Input the starting text you would like to use: "), token_to_int, int_to_token))
     
 
